@@ -1,0 +1,234 @@
+rm(list = ls())
+list.files()
+dir.create("data")
+dir.create("plot")
+suppressMessages(library(rtracklayer))
+suppressMessages(library(dplyr))
+gtf <- import("//wsl$/Ubuntu/home/pxy/data/NCBI/Homo_sapiens.GRCh38.104.gtf")
+class(gtf)
+length(unique(gtf$gene_name))
+##[1] 39398
+gtf <- gtf[!is.na(gtf$gene_name)]
+gtf <- gtf[gtf$gene_name != ""]
+save(gtf,file = "data/gtf.Rdata")
+
+gtf<- as.data.frame(gtf)
+View(gtf)
+table(gtf$transcript_biotype)
+biotype <- gtf[,"transcript_biotype"]
+head(unique(biotype))
+length(grep("lncRNA",biotype))
+t_df <- select(gtf,c(gene_id,gene_name,transcript_biotype))
+dim(t_df)
+head(t_df)
+
+lncRNA <- t_df$gene_name[t_df$transcript_biotype %in% 
+                             c("processed_transcript","lncRNA","Non coding","3prime_overlapping_ncRNA",
+                               "Antisense","lincRNA","Retained_intron","Sense_intronic",
+                               "Sense_overlapping","macro_lncRNA")]
+class(lncRNA)
+lncRNA <- as.data.frame(lncRNA)
+#lncRNA <- unique(lncRNA$lncRNA)
+length(sort(unique(lncRNA$lncRNA)))
+##[1] 15686
+lncRNA <- lncRNA[!duplicated(lncRNA$lncRNA),]
+lncRNA <- as.data.frame(lncRNA)
+
+suppressMessages(library(hgu133plus2.db))
+ids <- toTable(hgu133plus2SYMBOL)
+length(unique(ids$probe_id))
+##[1] 43149
+length(unique(ids$symbol))
+##[1] 20864
+tail(sort(table(ids$symbol)))
+table(sort(table(ids$symbol)))
+plot(table(sort(table(ids$symbol))))
+ids1 <- ids[match(lncRNA$lncRNA,ids$symbol),]
+ids2 <- na.omit(ids1)
+dim(ids2)
+##[1] 11877     2
+lncRNA_ids <- ids
+save(lncRNA_ids,lncRNA,file = "data/ensembl_gtf_lncRNA.Rdata")
+
+#just match "lncRNA"
+{
+lncRNA_1 <- t_df$gene_name[t_df$transcript_biotype%in%"lncRNA"]
+length(unique(lncRNA_1))
+##[1] 4760
+lncRNA_1 <- as.data.frame(lncRNA_1)
+#lncRNA <- unique(lncRNA$lncRNA)
+length(sort(unique(lncRNA_1$lncRNA)))
+##[1] 4759
+lncRNA_1 <- lncRNA_1[!duplicated(lncRNA_1$lncRNA),]
+lncRNA_1 <- as.data.frame(lncRNA_1)
+ids1_1 <- ids[match(lncRNA_1$lncRNA,ids$symbol),]
+ids2_1 <- na.omit(ids1_1)
+dim(ids2_1)
+##[1] 1981    2
+save(ids2_1,lncRNA_1,file = "data/ensembl_gtf_lncRNA(just_match_lncRNA).Rdata")
+}
+
+suppressMessages(library(GEOquery))
+gset <- getGEO("GSE4290",getGPL = F,destdir = "data")
+gset <- GSE4290[[1]]
+pdat <- pData(gset)
+View(pdat)
+eset <- exprs(gset)
+eset <- log2(eset+1)
+save(gset,eset,pdat,file = "data/GSE4290_raw.Rdata")
+
+metadata <- pdat
+dim(metadata)
+index1 <- grep("glioblastoma",metadata$characteristics_ch1)
+metadata1 <- metadata[index1,]
+index2 <- grep("non-tumor",metadata$characteristics_ch1)
+metadata2 <- metadata[index2,]
+pdat <- rbind(metadata1,metadata2)
+dim(pdat)
+##[1] 100  35
+group_list <- c(rep("gbm",77),rep("normal",23))
+table(group_list)
+
+suppressMessages(library(limma))
+boxplot(normalizeBetweenArrays(eset)[1:50,1:50],las=2)
+dim(eset)
+##[1] 54613   180
+eset <- eset[,colnames(eset)%in%pdat$geo_accession]
+dim(eset)
+##[1] 54613   100
+
+save(eset,pdat,group_list,file = "data/GSE4290_group.Rdata")
+
+if(F){
+    if(!require(hgu133plus2.db))BiocManager::install("hgu133plus2.db")
+    suppressMessages(library(hgu133plus2.db))
+    ls("package:hgu133plus2.db")
+    ann_ids <- toTable(hgu133plus2SYMBOL)
+}else if(F){
+    getGEO(gpl)
+    ann_ids <- data.table::fread(paste0(gpl,".soft"),header = T,skip = "ID",data.table = F)
+    ann_ids <- ids[c("ID","Gene Symbol"),]
+    colnames(ann_ids) <- c("id","gene")
+}
+head(ann_ids)
+tmp <- ann_ids
+tmp <- tmp[tmp$probe_id%in%rownames(eset),]
+tmp2 <- annoGene(IDs = tmp$symbol,ID_type = "SYMBOL",species = "human")
+##Warning in annoGene(IDs = tmp$symbol, ID_type = "SYMBOL", species = "human") :
+##3.94% of input IDs are fail to annotate... 
+sort(table(tmp2$biotypes))
+##lncRNA
+##  1840
+
+head(tmp2[tmp2$biotypes=="lncRNA",])
+lncRNA_symbol <- unique(tmp2[tmp2$biotypes=="lncRNA",1])
+lncRNA_symbol <- tmp[tmp$symbol%in%lncRNA_symbol,1]
+length(unique(lncRNA_symbol))
+##[1] 2522
+lnc_eset <- eset[lncRNA_symbol,]
+dim(lnc_eset)
+##[1] 2522  100
+lnc_eset[1:5,1:5]
+
+ids <- tmp
+head(ids)
+ids <- ids[ids$probe_id%in%rownames(lnc_eset),]
+ids <- ids[!duplicated(ids$probe_id),]
+lnc_eset <- lnc_eset[ids$probe_id,]
+lnc_eset[1:5,1:5]
+ids$median <- apply(lnc_eset,1,median)
+ids <- ids[order(ids$symbol,ids$median,decreasing = T),]
+ids <- ids[!duplicated(ids$symbol),]
+lnc_eset <- lnc_eset[ids$probe_id,]
+rownames(lnc_eset) <- ids$symbol
+dim(lnc_eset)
+##[1] 1834  100
+save(lnc_eset,file = "data/lncRNA_eset.Rdata")
+
+suppressMessages(library(pheatmap))
+cg <- names(tail(sort(apply(lnc_eset,1,sd))))
+n <- lnc_eset[cg,]
+pheatmap(lnc_eset[cg,],show_rownames = T,show_colnames = T)
+
+n2 <- t(scale(t(n)))
+n2[n2>2]=2
+n2[n2<-2]=-2
+pheatmap(n2,show_rownames = T,show_colnames = T)
+
+annotation_col <- data.frame(group <- group_list)
+rownames(annotation_col)=colnames(n2)
+pheatmap(n2,show_rownames = F,show_colnames = F,
+         cluster_cols = F,annotation_col = annotation_col)
+
+pheatmap(n2,show_rownames = F,show_colnames = F,
+         annotation_col = annotation_col,filename = "plot/heatmap.png")
+dev.off()
+
+suppressMessages(library(ggfortify))
+#hclust
+colnames(lnc_eset)=paste(group_list,1:ncol(lnc_eset),sep="_")
+lnc_eset[1:4,1:4]
+nodePar <- list( lab.cex = 0.6, pch = c( NA, 19 ), cex = 0.7, col = "blue" )
+hc = hclust( dist( t( lnc_eset ) ) )
+par(mar=c(5,5,5,10))
+png('plot/hclust.png', res = 250, height = 1800)
+plot( as.dendrogram( hc ), nodePar = nodePar, horiz = TRUE )
+dev.off()
+
+#PCA
+suppressMessages(library(ggfortify))
+df <- as.data.frame(t(lnc_eset))
+df$group <- group_list
+png("plot/pca.png",res = 120)
+autoplot(prcomp(df[,1:(ncol(df)-1)]),
+         data=df,colour="group")+
+    theme_bw()
+dev.off()
+
+#DEG
+#load("data/lncRNA_eset.Rdata")
+suppressMessages(library(limma))
+design <- model.matrix(~0 + factor( group_list ) )
+colnames( design ) = levels( factor( group_list ) )
+rownames( design ) = colnames( lnc_eset )
+head(design)
+contrast.matrix <- makeContrasts( "gbm-normal", levels = design )
+head(contrast.matrix)
+
+fit <- lmFit( lnc_eset, design )
+fit2 <- contrasts.fit( fit, contrast.matrix ) 
+fit3 <- eBayes( fit2 )
+nrDEG = topTable( fit3, coef = 1, n = Inf ) 
+head(nrDEG)
+write.table( nrDEG, file = "data/nrDEG.out")
+
+#volcano plot
+suppressMessages(library(ggplot2))
+logFC_cutoff <- with( nrDEG, mean( abs( logFC ) ) + 2 * sd( abs( logFC ) ) )
+logFC_cutoff=1
+nrDEG$change = as.factor( ifelse( nrDEG$P.Value < 0.05 & abs(nrDEG$logFC) > logFC_cutoff,
+                                  ifelse( nrDEG$logFC > logFC_cutoff , 'up', 'down' ), 'stable' ) )
+
+this_tile <- paste0( 'Cutoff for logFC is ', round( logFC_cutoff, 3 ),
+                     '
+The number of up gene is ', nrow(nrDEG[ nrDEG$change =='up', ] ),
+                     '
+The number of down gene is ', nrow(nrDEG[ nrDEG$change =='down', ] ) )
+
+up <- nrow(nrDEG[ nrDEG$change =='up', ] )
+down <- nrow(nrDEG[ nrDEG$change =='down', ] ) 
+ggplot(data = nrDEG, aes( x = logFC, y = -log10(P.Value), color = change)) +
+    geom_point( alpha = 0.4, size = 1.75) +
+    scale_colour_manual( values = c('blue','black','red') ) +
+    ggtitle( this_tile ) 
+
+#pheat map
+suppressMessages(library( "pheatmap" ))
+choose_gene = head(rownames( nrDEG ),1000)
+choose_matrix = lnc_eset[ choose_gene, ]
+choose_matrix = t( scale( t( lnc_eset ) ) )
+annotation_col = data.frame( CellType = factor( group_list ) )
+rownames( annotation_col ) = colnames( lnc_eset )
+pheatmap( fontsize = 2, choose_matrix, annotation_col = annotation_col,show_rownames = F,
+          annotation_legend = F,filename="plot/pheatmap.png")
+dev.off()
